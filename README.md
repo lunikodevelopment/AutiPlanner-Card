@@ -28,7 +28,20 @@ up, because it draws that integration's agenda sensor and acts through its
 actions. It holds no AutiPlanner credential of its own.
 
 Adding an item needs only a title and a day part: the date is optional and
-defaults to today, and a time is optional too.
+defaults to today, and a time is optional too. **Repeats** offers *Just once*,
+*Every day*, and *Every week*; a weekly repeat lands on the weekday of the date
+you chose, and a repeating day is marked with ↻. Tapping ↻ asks before removing
+the repeat, because that removes every day it falls on.
+
+**Icons** offers a set of pictures drawn from
+[Phosphor Icons](https://phosphoricons.com) — teeth, medication, meals, laundry,
+the school run, appointments — with the meaning written on each so the choice is
+what the household is trying to say rather than the name of a drawing. The icons
+are built into this card and need nothing else installed.
+
+Each routine also offers a remove control, which asks before it acts. Removing a
+day of a repeat removes that day and leaves the rest of the repeat; the ↻ control
+is the one that ends it.
 
 | Option | Default | Meaning |
 |---|---|---|
