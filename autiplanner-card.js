@@ -9,6 +9,15 @@ var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "acce
 
 // ../../packages/core/src/time.ts
 var DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+var WEEKDAYS = [
+  "SUNDAY",
+  "MONDAY",
+  "TUESDAY",
+  "WEDNESDAY",
+  "THURSDAY",
+  "FRIDAY",
+  "SATURDAY"
+];
 function isCalendarDate(value) {
   const match = DATE_PATTERN.exec(value);
   if (!match) return false;
@@ -21,9 +30,53 @@ function isCalendarDate(value) {
   const utc = new Date(Date.UTC(year, month - 1, day));
   return utc.getUTCFullYear() === year && utc.getUTCMonth() === month - 1 && utc.getUTCDate() === day;
 }
+function weekdayName(date) {
+  if (!isCalendarDate(date)) return void 0;
+  const match = DATE_PATTERN.exec(date);
+  if (!match) return void 0;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const weekday = WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  return weekday;
+}
+function addDays(date, days) {
+  if (!isCalendarDate(date)) return void 0;
+  const match = DATE_PATTERN.exec(date);
+  if (!match) return void 0;
+  const utc = new Date(
+    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  );
+  utc.setUTCDate(utc.getUTCDate() + days);
+  const year = utc.getUTCFullYear().toString().padStart(4, "0");
+  const month = (utc.getUTCMonth() + 1).toString().padStart(2, "0");
+  const day = utc.getUTCDate().toString().padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 // ../../packages/core/src/model.ts
 var DAY_PARTS = ["morning", "afternoon", "evening", "night"];
+
+// ../../packages/core/src/recurrence.ts
+var WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+var WEEKDAY_FROM_CODE = {
+  SU: 0,
+  MO: 1,
+  TU: 2,
+  WE: 3,
+  TH: 4,
+  FR: 5,
+  SA: 6
+};
+function weekdayCodeOf(date) {
+  if (!isCalendarDate(date)) return void 0;
+  return WEEKDAY_CODES.find(
+    (candidate) => WEEKDAY_FROM_CODE[candidate] === utcDate(date).getUTCDay()
+  );
+}
+function utcDate(date) {
+  return new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))));
+}
 
 // ../../packages/core/src/presentation.ts
 var STATUS_SYMBOL = {
@@ -55,13 +108,23 @@ function formatClock(timestamp) {
   if (zone) return `${clock} ${zone}`;
   return clock;
 }
+function weekdayLabel(date) {
+  const name = weekdayName(date);
+  if (name === void 0) return void 0;
+  return name[0] + name.slice(1).toLowerCase();
+}
 
 // src/index.ts
 var DOMAIN = "autiplanner_saas";
 var CARD_TAG = "autiplanner-card";
 var STATUSES = ["pending", "completed", "missed", "skipped"];
 var MAX_DAYS = 7;
-var _root, _config, _hass, _optimistic, _signature, _busy, _message, _messageIsError, _editorOpen, _draft, _AutiPlannerCard_instances, entityId_fn, signatureOf_fn, render_fn, renderDay_fn, renderPart_fn, renderItem_fn, renderEditor_fn, onClick_fn, onSubmit_fn, act_fn, create_fn, service_fn, refresh_fn, syncOptimistic_fn;
+var REPEAT_LABEL = {
+  none: "Just once",
+  daily: "Every day",
+  weekly: "Every week"
+};
+var _root, _config, _hass, _optimistic, _signature, _busy, _message, _messageIsError, _editorOpen, _draft, _confirmStop, _AutiPlannerCard_instances, entityId_fn, signatureOf_fn, render_fn, renderDay_fn, renderPart_fn, renderItem_fn, renderEditor_fn, onClick_fn, onSubmit_fn, onChange_fn, act_fn, create_fn, stopRepeating_fn, service_fn, refresh_fn, syncOptimistic_fn;
 var AutiPlannerCard = class extends HTMLElement {
   constructor() {
     super();
@@ -76,10 +139,13 @@ var AutiPlannerCard = class extends HTMLElement {
     __privateAdd(this, _message, "");
     __privateAdd(this, _messageIsError, false);
     __privateAdd(this, _editorOpen, false);
-    __privateAdd(this, _draft, { title: "", date: "", dayPart: "morning", time: "" });
+    __privateAdd(this, _draft, { title: "", date: "", dayPart: "morning", time: "", repeat: "none" });
+    /** The series whose removal is waiting to be confirmed, if any. */
+    __privateAdd(this, _confirmStop, null);
     __privateSet(this, _root, this.attachShadow({ mode: "open" }));
     __privateGet(this, _root).addEventListener("click", (event) => __privateMethod(this, _AutiPlannerCard_instances, onClick_fn).call(this, event));
     __privateGet(this, _root).addEventListener("submit", (event) => __privateMethod(this, _AutiPlannerCard_instances, onSubmit_fn).call(this, event));
+    __privateGet(this, _root).addEventListener("change", (event) => __privateMethod(this, _AutiPlannerCard_instances, onChange_fn).call(this, event));
   }
   static getStubConfig(hass) {
     return {
@@ -125,6 +191,7 @@ _message = new WeakMap();
 _messageIsError = new WeakMap();
 _editorOpen = new WeakMap();
 _draft = new WeakMap();
+_confirmStop = new WeakMap();
 _AutiPlannerCard_instances = new WeakSet();
 // ------------------------------------------------------------- rendering
 entityId_fn = function() {
@@ -146,7 +213,11 @@ render_fn = function() {
   const items = readItems(state);
   __privateMethod(this, _AutiPlannerCard_instances, syncOptimistic_fn).call(this, items);
   const today = localToday(hass?.config.time_zone);
-  const days = Array.from({ length: __privateGet(this, _config).days }, (_, offset) => addDays(today, offset));
+  const days = [];
+  for (let offset = 0; offset < __privateGet(this, _config).days; offset += 1) {
+    const date = addDays(today, offset);
+    if (date !== void 0) days.push(date);
+  }
   const effective = items.map((item) => {
     const override = __privateGet(this, _optimistic).get(item.uid);
     return override === void 0 ? item : { ...item, status: override };
@@ -206,13 +277,20 @@ renderItem_fn = function(item) {
     (button) => `<button type="button" class="act" data-act="${button.action}" data-uid="${escape(item.uid)}"${disabled}
              aria-label="Mark ${escape(item.title)} ${escape(button.word)}">${button.glyph}</button>`
   ).join("");
-  return `<li class="item" data-status="${status}">
+  const repeat = item.routineId === void 0 ? "" : `<button type="button" class="repeat" data-act="stop-repeat" data-series="${escape(item.routineId)}"
+             aria-label="Stop repeating ${escape(item.title)}">&#8635;</button>`;
+  const acts = item.routineId !== void 0 && __privateGet(this, _confirmStop) === item.routineId ? `<span class="confirm" role="status">
+             <span class="confirm-text">Stop repeating?</span>
+             <button type="button" class="act" data-act="stop-repeat-yes" data-series="${escape(item.routineId)}" aria-label="Yes, stop repeating ${escape(item.title)}">Yes</button>
+             <button type="button" class="act" data-act="stop-repeat-no" aria-label="Keep repeating ${escape(item.title)}">No</button>
+           </span>` : `<span class="acts">${buttons}</span>`;
+  return `<li class="item" data-status="${status}"${item.routineId === void 0 ? "" : ` data-series="${escape(item.routineId)}"`}>
       <span class="glyph" aria-hidden="true">${STATUS_SYMBOL[status]}</span>
       <span class="main">
-        <span class="name">${escape(item.title)}</span>
+        <span class="name">${escape(item.title)}${repeat}</span>
         <span class="meta">${escape(meta)}</span>
       </span>
-      <span class="acts">${buttons}</span>
+      ${acts}
     </li>`;
 };
 renderEditor_fn = function(today) {
@@ -221,6 +299,11 @@ renderEditor_fn = function(today) {
   const options = DAY_PARTS.map(
     (dayPart) => `<option value="${dayPart}"${dayPart === draft.dayPart ? " selected" : ""}>${escape(DAY_PART_HEADING[dayPart])}</option>`
   ).join("");
+  const repeats = Object.keys(REPEAT_LABEL).map((choice) => {
+    const label = choice === "weekly" ? `Every ${weekdayLabel(date) ?? ""}` : REPEAT_LABEL[choice];
+    return `<option value="${choice}"${choice === draft.repeat ? " selected" : ""}${choice === "weekly" ? ' id="ap-repeat-weekly"' : ""}>${escape(label)}</option>`;
+  }).join("");
+  const note = draft.repeat === "weekly" ? `Repeats every ${weekdayLabel(date) ?? ""}` : draft.repeat === "daily" ? "Repeats every day" : "";
   return `<form class="add" data-form="add">
       <label for="ap-title">New routine item</label>
       <input id="ap-title" name="title" value="${escape(draft.title)}" required maxlength="120" placeholder="Take medication" />
@@ -237,7 +320,12 @@ renderEditor_fn = function(today) {
           <label for="ap-time">Time (optional)</label>
           <input id="ap-time" name="time" type="time" value="${escape(draft.time)}" />
         </div>
+        <div>
+          <label for="ap-repeat">Repeats</label>
+          <select id="ap-repeat" name="repeat">${repeats}</select>
+        </div>
       </div>
+      <p class="repeat-note"${note === "" ? " hidden" : ""}>${escape(note)}</p>
       <button type="submit"${__privateGet(this, _busy) ? " disabled" : ""}>Add item</button>
     </form>`;
 };
@@ -249,6 +337,7 @@ onClick_fn = function(event) {
   if (trigger === null) return;
   const action = trigger.dataset["act"];
   const uid = trigger.dataset["uid"];
+  const series = trigger.dataset["series"];
   if (action === "toggle-add") {
     __privateSet(this, _editorOpen, !__privateGet(this, _editorOpen));
     __privateMethod(this, _AutiPlannerCard_instances, render_fn).call(this);
@@ -256,6 +345,20 @@ onClick_fn = function(event) {
   }
   if (action === "refresh") {
     void __privateMethod(this, _AutiPlannerCard_instances, refresh_fn).call(this);
+    return;
+  }
+  if (action === "stop-repeat") {
+    __privateSet(this, _confirmStop, series ?? null);
+    __privateMethod(this, _AutiPlannerCard_instances, render_fn).call(this);
+    return;
+  }
+  if (action === "stop-repeat-no") {
+    __privateSet(this, _confirmStop, null);
+    __privateMethod(this, _AutiPlannerCard_instances, render_fn).call(this);
+    return;
+  }
+  if (action === "stop-repeat-yes") {
+    if (series !== void 0) void __privateMethod(this, _AutiPlannerCard_instances, stopRepeating_fn).call(this, series);
     return;
   }
   if (uid === void 0) return;
@@ -272,6 +375,35 @@ onSubmit_fn = function(event) {
   if (form === null) return;
   event.preventDefault();
   void __privateMethod(this, _AutiPlannerCard_instances, create_fn).call(this, form);
+};
+/**
+ * Keeps the weekday wording in step with the date, in place.
+ *
+ * The repeat select and the sentence under the form both name the weekday a
+ * weekly routine would land on, and that word comes from the date field. Only
+ * that text is rewritten: re-rendering the form here would drop focus.
+ */
+onChange_fn = function(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const form = target.closest("form[data-form='add']");
+  if (form === null) return;
+  const data = new FormData(form);
+  const chosen = String(data.get("date") ?? "").trim();
+  const date = chosen === "" ? localToday(__privateGet(this, _hass)?.config.time_zone) : chosen;
+  const repeat = String(data.get("repeat") ?? "none");
+  const weekday = isCalendarDate(date) ? weekdayLabel(date) ?? "" : "";
+  const weekly = form.querySelector("#ap-repeat-weekly");
+  if (weekly !== null && weekday !== "") {
+    weekly.textContent = `Every ${weekday}`;
+  }
+  const note = form.querySelector(".repeat-note");
+  if (note !== null) {
+    const text = repeat === "weekly" && weekday !== "" ? `Repeats every ${weekday}` : repeat === "daily" ? "Repeats every day" : "";
+    note.textContent = text;
+    if (text === "") note.setAttribute("hidden", "");
+    else note.removeAttribute("hidden");
+  }
 };
 act_fn = async function(uid, button) {
   if (__privateGet(this, _busy)) return;
@@ -296,6 +428,7 @@ create_fn = async function(form) {
   const chosen = String(data.get("date") ?? "").trim();
   const dayPart = String(data.get("dayPart") ?? "morning");
   const time = String(data.get("time") ?? "").trim();
+  const repeat = String(data.get("repeat") ?? "none");
   if (title === "" || !isDayPart(dayPart)) {
     __privateSet(this, _message, "A title and a day part are required.");
     __privateSet(this, _messageIsError, true);
@@ -309,23 +442,56 @@ create_fn = async function(form) {
     __privateMethod(this, _AutiPlannerCard_instances, render_fn).call(this);
     return;
   }
-  const payload = {
-    uid: `ha-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-    title,
-    date,
-    day_part: dayPart,
-    status: "pending"
-  };
-  if (time !== "") {
-    payload["start"] = `${date}T${time}:00`;
-  }
+  const uid = `ha-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const start = time === "" ? void 0 : `${date}T${time}:00`;
   __privateSet(this, _busy, true);
   __privateSet(this, _message, "");
   __privateSet(this, _messageIsError, false);
   try {
-    await __privateMethod(this, _AutiPlannerCard_instances, service_fn).call(this, "create", payload);
-    __privateSet(this, _draft, { title: "", date, dayPart, time });
+    if (repeat === "none") {
+      const payload = {
+        uid,
+        title,
+        date,
+        day_part: dayPart,
+        status: "pending"
+      };
+      if (start !== void 0) payload["start"] = start;
+      await __privateMethod(this, _AutiPlannerCard_instances, service_fn).call(this, "create", payload);
+    } else {
+      const payload = {
+        uid,
+        title,
+        date,
+        day_part: dayPart,
+        recurrence: repeat === "weekly" ? (
+          // The weekday comes from the date the household chose, which is
+          // what "the same day every week" means on the form.
+          { freq: "weekly", byDay: [weekdayCodeOf(date) ?? "MO"] }
+        ) : { freq: "daily" }
+      };
+      if (start !== void 0) payload["start"] = start;
+      await __privateMethod(this, _AutiPlannerCard_instances, service_fn).call(this, "add_series", payload);
+    }
+    __privateSet(this, _draft, { title: "", date, dayPart, time, repeat: "none" });
     __privateSet(this, _editorOpen, false);
+    await __privateMethod(this, _AutiPlannerCard_instances, refresh_fn).call(this);
+  } catch (error) {
+    __privateSet(this, _message, errorText(error));
+    __privateSet(this, _messageIsError, true);
+  } finally {
+    __privateSet(this, _busy, false);
+    __privateMethod(this, _AutiPlannerCard_instances, render_fn).call(this);
+  }
+};
+stopRepeating_fn = async function(series) {
+  if (__privateGet(this, _busy)) return;
+  __privateSet(this, _busy, true);
+  __privateSet(this, _message, "");
+  __privateSet(this, _messageIsError, false);
+  try {
+    await __privateMethod(this, _AutiPlannerCard_instances, service_fn).call(this, "delete", { uid: series });
+    __privateSet(this, _confirmStop, null);
     await __privateMethod(this, _AutiPlannerCard_instances, refresh_fn).call(this);
   } catch (error) {
     __privateSet(this, _message, errorText(error));
@@ -416,12 +582,6 @@ function findStatus(row, optimistic) {
   const status = element?.dataset["status"];
   return status !== void 0 && STATUSES.includes(status) ? status : "pending";
 }
-function addDays(date, delta) {
-  const [year, month, day] = date.split("-").map(Number);
-  const utc = new Date(Date.UTC(year, month - 1, day));
-  utc.setUTCDate(utc.getUTCDate() + delta);
-  return utc.toISOString().slice(0, 10);
-}
 function localToday(timeZone) {
   const now = /* @__PURE__ */ new Date();
   try {
@@ -500,6 +660,12 @@ var STYLES = `
          background: var(--secondary-background-color, #ececec); border: none; }
   .act:hover { background: var(--primary-color, #03a9f4); color: #fff; }
   .act:disabled { opacity: 0.5; cursor: default; }
+  .repeat { background: none; border: none; cursor: pointer; padding: 0 4px; font-size: 0.9rem;
+            color: var(--secondary-text-color, #727272); min-width: 32px; min-height: 32px; }
+  .repeat:hover { color: var(--primary-color, #03a9f4); }
+  .confirm { display: flex; align-items: center; gap: 4px; }
+  .confirm-text { font-size: 0.78rem; color: var(--secondary-text-color, #727272); white-space: nowrap; }
+  .add .repeat-note { margin: 0; font-size: 0.78rem; color: var(--secondary-text-color, #727272); }
   .empty { font-size: 0.85rem; color: var(--secondary-text-color, #727272); padding: 4px 8px; }
   .message, .notice { margin-top: 10px; font-size: 0.85rem; padding: 8px 10px; border-radius: 8px;
                       background: var(--secondary-background-color, #ececec);
@@ -536,7 +702,6 @@ var index_default = AutiPlannerCard;
 export {
   AutiPlannerCard,
   actionsFor,
-  addDays,
   dayName,
   index_default as default,
   findAgendaEntity,
